@@ -24,10 +24,17 @@ ipc_msg_t ipcMsgForCM0 = {               /* IPC structure to be sent to CM0 */
     .len      = 0
 };
 
+static float Kp = 1000.0f;
+static float Ki = 0.0f;
+static float Kd = 0.0f;
+
+static float lastError = 0;
+static float integral = 0;
+
 static void SendBleNotification(const char* message);
 static void SendBleNotificationF(const char* format, ...);
 static void processIncomingIPCMessage(ipc_msg_t* msg);
-static void processCM4Command(enum cm4CommandList cmd);
+static void processCM4Command(ipc_msg_t* msg);
 
 
 int main(void)
@@ -70,7 +77,7 @@ int main(void)
     Cy_GPIO_Clr(LEDR_0_PORT, LEDR_0_NUM); //red LED
    
 
-//    CyDelay(1000);
+    CyDelay(500);
 
     uint32_t timeout = Timing_GetMillisecongs();
     uint32_t cycle = 0;
@@ -79,6 +86,7 @@ int main(void)
     Leds_FillSolidColor(0, 0, 0);
     
     // MAIN LOOP   
+    
     SendBleNotification("Wroom! from CM4!");
     for(;;)
     {
@@ -105,51 +113,40 @@ int main(void)
         }
         
         track = Track_Read();
-        
-        int16_t error = 0;
+        // ...
+    	 float error = 0.0f; // <--- ЗМІНЕНО НА FLOAT
         int8_t activeCount = 0;
-        
-        // рахуєм відхилення
         for (int8_t i = 0; i < 7; i++) {
-            if (track & (1 << i)) {
-                error += (i - 3); // від -3 до +3
-                activeCount++;
-            }
-        }
+                if (track & (1 << i)) {
+                    error += (i - 3); // від -3 до +3
+                    activeCount++;
+                    }
+           }
 
         if (activeCount > 0)
-            error /= activeCount;
-
-        // PID
-        float Kp = 500.0f;
-        float Ki = 0.0f;
-        float Kd = 200.0f;
-
-        static float lastError = 0;
-        static float integral = 0;
+        	 	 error /= (float)activeCount; // <--- ТЕПЕР ЦЕ ДІЛЕННЯ FLOAT
 
         float derivative = error - lastError;
         integral += error;
         float correction = Kp * error + Ki * integral + Kd * derivative;
         lastError = error;
 
-        // керування
-        int baseSpeed = 1000;
-        int leftSpeed  = baseSpeed + correction;
-        int rightSpeed = baseSpeed - correction;
+    float baseSpeed = 1000.0f; // <--- ЗМІНЕНО НА FLOAT
+ 	float leftSpeed = baseSpeed + correction; // <--- ТЕПЕР ЦЕ FLOAT
+ 	 float rightSpeed = baseSpeed - correction; // <--- ТЕПЕР ЦЕ FLOAT
 
-        // обмеження
-        if (leftSpeed > 4095) leftSpeed = 4095;
-        if (rightSpeed > 4095) rightSpeed = 4095;
-        if (leftSpeed < -4095) leftSpeed = -4095;
-        if (rightSpeed < -4095) rightSpeed = -4095;
+	 // обмеження
+ 	if (leftSpeed > 4095.0f) leftSpeed = 4095.0f;
+    if (rightSpeed > 4095.0f) rightSpeed = 4095.0f;
+ 	  if (leftSpeed < -4095.0f) leftSpeed = -4095.0f;
+ 	 	if (rightSpeed < -4095.0f) rightSpeed = -4095.0f;
 
-        Motor_Move(-leftSpeed, -leftSpeed, -rightSpeed, -rightSpeed);
-
+        // Конвертуємо у int лише перед відправкою в мотор
+ 	 Motor_Move((int)-leftSpeed, (int)-leftSpeed, (int)-rightSpeed, (int)-rightSpeed);
         Leds_Update();
         
-        SendBleNotificationF("Count = %d\r\n", activeCount);
-        SendBleNotificationF("Err:%ld, P:%ld, D:%ld", error, integral, derivative);
+        SendBleNotificationF("Cnt:%d, Err:%.2f, I:%.2f, D:%.2f\r\n", 
+                             activeCount, (float)error, integral, derivative);
        
         CyDelay(50);
     }
@@ -168,10 +165,7 @@ static void processIncomingIPCMessage(ipc_msg_t* msg)
             {
                 case IPC_USR_CODE_CMD:
                 {
-                    // Only [0] element was used for simplicity.
-                    // IDEA: You could expand it to accept strings or more complex data packets!
-                    // You can define array of strings and perform memcmp. This operation is a bit more costful.
-                    processCM4Command((enum cm4CommandList)msg->buffer[0]);
+                    processCM4Command(msg);
                     break;
                 }
                 case IPC_USR_CODE_REQ:
@@ -185,9 +179,11 @@ static void processIncomingIPCMessage(ipc_msg_t* msg)
         }
     }
 }
-
-static void processCM4Command(enum cm4CommandList cmd)
+static void processCM4Command(ipc_msg_t* msg)
 {
+    // Отримуємо ID команди з першого байта буфера
+    enum cm4CommandList cmd = (enum cm4CommandList)msg->buffer[0];
+
     switch (cmd)
     {
         case CM4_COMMAND_LED_ENA:
@@ -204,6 +200,7 @@ static void processCM4Command(enum cm4CommandList cmd)
         }
         case CM4_COMMAND_CAR_SAY:
         {
+            // Цю команду тепер можна замінити на SendBleNotification("Wroom!")
             if (CM4_IsCM0Ready())
             {
                 ipcMsgForCM0.userCode = IPC_USR_CODE_CMD;
@@ -215,17 +212,76 @@ static void processCM4Command(enum cm4CommandList cmd)
         }
         case CM4_COMMAND_ECHO:
         {
+            // *** ВИПРАВЛЕНА ЛОГІКА ECHO ***
+            // (Використовуємо 'msg', що прийшов, а не викликаємо CM4_GetCM0Message() знову)
             if (CM4_IsCM0Ready())
             {
                 ipcMsgForCM0.userCode = IPC_USR_CODE_CMD;
-                ipcMsgForCM0.len = CM4_GetCM0Message()->len;
+                ipcMsgForCM0.len = msg->len; // Використовуємо довжину з 'msg'
                 ipcMsgForCM0.buffer[0] = (uint8_t)CM0_SHARED_BLE_NTF_RELAY;
-                memcpy(&ipcMsgForCM0.buffer[1], &CM4_GetCM0Message()->buffer[1], ipcMsgForCM0.len - 1);
+                
+                // Копіюємо дані (все, крім першого байта команди)
+                if (msg->len > 1)
+                {
+                    memcpy(&ipcMsgForCM0.buffer[1], &msg->buffer[1], msg->len - 1);
+                }
                 CM4_SendCM0Message(&ipcMsgForCM0);
             }
             break;
         }
+
+        // =======================================================
+        // +++ ДОДАНО: Обробка нових команд ПІД-регулятора +++
+        // =======================================================
+
+        case CM4_COMMAND_SET_KP:
+        {
+            // Очікуємо 5 байтів: 1 (команда) + 4 (float)
+            if (msg->len == 5)
+            {
+                // Безпечно копіюємо 4 байти з буфера у нашу float змінну
+                memcpy(&Kp, &msg->buffer[1], sizeof(float)); 
+                SendBleNotificationF("OK: Kp set to %f\r\n", Kp);
+            }
+            else
+            {
+                SendBleNotification("ERR: Kp packet bad len\r\n");
+            }
+            break;
+        }
+
+        case CM4_COMMAND_SET_KI:
+        {
+            if (msg->len == 5)
+            {
+                memcpy(&Ki, &msg->buffer[1], sizeof(float)); 
+                SendBleNotificationF("OK: Ki set to %f\r\n", Ki);
+            }
+            else
+            {
+                SendBleNotification("ERR: Ki packet bad len\r\n");
+            }
+            break;
+        }
+
+        case CM4_COMMAND_SET_KD:
+        {
+            if (msg->len == 5)
+            {
+                memcpy(&Kd, &msg->buffer[1], sizeof(float)); 
+                SendBleNotificationF("OK: Kd set to %f\r\n", Kd);
+            }
+            else
+            {
+                SendBleNotification("ERR: Kd packet bad len\r\n");
+            }
+            break;
+        }
+        // =======================================================
+
         default:
+            // Невідома команда
+            SendBleNotificationF("ERR: Unknown cmd 0x%X\r\n", cmd);
             break;
     }
 }
