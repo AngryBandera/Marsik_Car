@@ -2,7 +2,9 @@
 #include "car.h"
 #include "music.h"
 #include "cm4_common.h"
+#include <stdio.h>
 #include <string.h>
+#include <stdarg.h>
 
 /* Implement ISR for I2C_1 */
 void I2C_1_Isr(void)
@@ -21,6 +23,26 @@ ipc_msg_t ipcMsgForCM0 = {               /* IPC structure to be sent to CM0 */
     .buffer   = {},
     .len      = 0
 };
+static void SendBleNotificationF(const char* format, ...)
+{
+    // Буфер тепер локальний, всередині функції (на стеку)
+    // Переконайтеся, що він достатньо великий для ваших повідомлень
+    char ble_buffer[128]; 
+    
+    // Обробка змінних аргументів (va_list)
+    va_list args;
+    va_start(args, format);
+    
+    // Створюємо відформатований рядок у нашому буфері
+    // vsnprintf - це версія snprintf, що приймає va_list
+    vsnprintf(ble_buffer, sizeof(ble_buffer), format, args);
+    
+    va_end(args);
+    
+    // Тепер просто викликаємо нашу стару функцію з готовим буфером
+    SendBleNotification(ble_buffer);
+}
+
 static void SendBleNotification(const char* message)
 {
     if (!CM4_IsCM0Ready())
@@ -139,8 +161,6 @@ int main(void)
             }
         }
 
-        SendBleNotification("Count = " + activeCount + "\r\n");
-
         if (activeCount > 0)
             error /= activeCount;
 
@@ -171,6 +191,9 @@ int main(void)
         Motor_Move(-leftSpeed, -leftSpeed, -rightSpeed, -rightSpeed);
 
         Leds_Update();
+        
+        SendBleNotificationF("Count = %d\r\n", activeCount);
+        SendBleNotificationF("Err:%ld, P:%ld, D:%ld", error, p_term, d_term);
        
         CyDelay(50);
     }
