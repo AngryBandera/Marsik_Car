@@ -193,7 +193,7 @@ int main(void)
         Leds_Update();
         
         SendBleNotificationF("Count = %d\r\n", activeCount);
-        SendBleNotificationF("Err:%ld, P:%ld, D:%ld", error, p_term, d_term);
+        SendBleNotificationF("Err:%ld, P:%ld, D:%ld", error, integral, derivative);
        
         CyDelay(50);
     }
