@@ -90,28 +90,9 @@ int main(void)
     // Turn on LEDs on PSoC6 board
     Cy_GPIO_Clr(LEDG_0_PORT, LEDG_0_NUM); //green LED
     Cy_GPIO_Clr(LEDR_0_PORT, LEDR_0_NUM); //red LED
-    
-    //Music_FurElise();
-
-    //Sound_Play(440u,1000u);
    
-//    Motor_Move(2000, 2000, 2000, 2000);     //go forward
-//    CyDelay(1000);
-//    Motor_Move(0, 0, 0, 0);                 //stop
-//    CyDelay(1000);
-//    Motor_Move(-1000, -1000, -1000, -1000); //go back
-//    CyDelay(2000);
-//    Motor_Move(0, 0, 0, 0);                 //stop
-//    CyDelay(1000);
 
-//    Motor_Move(-2000, -2000, 2000, 2000);   //turn left
 //    CyDelay(1000);
-//    Motor_Move(0, 0, 0, 0);                 //stop
-//    CyDelay(1000);
-//    Motor_Move(3000, 3000, -3000, -3000);   //turn right
-//    CyDelay(750);
-//    Motor_Move(0, 0, 0, 0);                 //stop
-//    CyDelay(1000);   
 
     uint32_t timeout = Timing_GetMillisecongs();
     uint32_t cycle = 0;
@@ -129,23 +110,6 @@ int main(void)
             processIncomingIPCMessage(CM4_GetCM0Message());
         }
        
-        // Blink Reg and blue LEDs based on timer
-       // if((Timing_GetMillisecongs() - timeout) > 1000u)
-      //  {
-           // if (cycle == 0u)
-           // {
-               // Leds_PutPixel(7u, 0x00u, 0x55u, 0x00u);
-               // Leds_PutPixel(10u, 0x00u, 0x00u, 0x55u);
-             //   cycle++;
-           // }
-           // else             
-           // {
-                //Leds_PutPixel(7u, 0x00u, 0x00u, 0x55u);
-               // Leds_PutPixel(10u, 0x00u, 0x55u, 0x00u);
-             //   cycle = 0;
-           // }
-         //   timeout = Timing_GetMillisecongs();
-       // }
         
         // Duplicate track sensor on Smart LEDs
         uint8_t track = Track_Read();
@@ -154,6 +118,57 @@ int main(void)
             Leds_PutPixel(i,track & 0x01u ? 0x55u : 0x00u, 0x00u, 0x00u);
             track = track >> 1;
         }    
+        
+        track = Track_Read();
+        if(track & 0x08){
+            Leds_PutPixel(7, 255, 0, 0);
+        }else{
+            Leds_PutPixel(7, 0, 0, 0);
+        }
+        
+        track = Track_Read();
+        
+        int16_t error = 0;
+        int8_t activeCount = 0;
+        
+        // рахуєм відхилення
+        for (int8_t i = 0; i < 7; i++) {
+            if (track & (1 << i)) {
+                error += (i - 3); // від -3 до +3
+                activeCount++;
+            }
+        }
+
+        SendBleNotification("Count = " + activeCount + "\r\n");
+
+        if (activeCount > 0)
+            error /= activeCount;
+
+        // PID
+        float Kp = 500.0f;
+        float Ki = 0.0f;
+        float Kd = 200.0f;
+
+        static float lastError = 0;
+        static float integral = 0;
+
+        float derivative = error - lastError;
+        integral += error;
+        float correction = Kp * error + Ki * integral + Kd * derivative;
+        lastError = error;
+
+        // керування
+        int baseSpeed = 1000;
+        int leftSpeed  = baseSpeed + correction;
+        int rightSpeed = baseSpeed - correction;
+
+        // обмеження
+        if (leftSpeed > 4095) leftSpeed = 4095;
+        if (rightSpeed > 4095) rightSpeed = 4095;
+        if (leftSpeed < -4095) leftSpeed = -4095;
+        if (rightSpeed < -4095) rightSpeed = -4095;
+
+        Motor_Move(-leftSpeed, -leftSpeed, -rightSpeed, -rightSpeed);
 
         Leds_Update();
        
