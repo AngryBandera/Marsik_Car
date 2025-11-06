@@ -85,6 +85,8 @@ int main(void)
     // Then execute remaining code
     Leds_FillSolidColor(0, 0, 0);
     
+    uint32_t bleNotifyTimer = Timing_GetMillisecongs();
+    
     // MAIN LOOP   
     
     SendBleNotification("Wroom! from CM4!");
@@ -95,59 +97,83 @@ int main(void)
         {
             processIncomingIPCMessage(CM4_GetCM0Message());
         }
-       
+        
         
         // Duplicate track sensor on Smart LEDs
         uint8_t track = Track_Read();
+        uint8_t track_copy_for_led = track; // Робимо копію, щоб не зчитувати ще раз
         for (uint8_t i=0; i<7u; i++)
         {
-            Leds_PutPixel(i,track & 0x01u ? 0x55u : 0x00u, 0x00u, 0x00u);
-            track = track >> 1;
+            Leds_PutPixel(i, track_copy_for_led & 0x01u ? 0x55u : 0x00u, 0x00u, 0x00u);
+            track_copy_for_led = track_copy_for_led >> 1;
         }    
         
-        track = Track_Read();
-        if(track & 0x08){
-            Leds_PutPixel(7, 255, 0, 0);
+        if(track & 0x08){ // Центральний датчик
+            Leds_PutPixel(7, 255, 0, 0); // Червоний
         }else{
             Leds_PutPixel(7, 0, 0, 0);
         }
         
-        track = Track_Read();
-        // ...
-    	 float error = 0.0f; // <--- ЗМІНЕНО НА FLOAT
+        
+        // Логіка ПІД-регулятора
+        float error = 0.0f; 
         int8_t activeCount = 0;
+        
         for (int8_t i = 0; i < 7; i++) {
-                if (track & (1 << i)) {
-                    error += (i - 3); // від -3 до +3
-                    activeCount++;
-                    }
-           }
+            if (track & (1 << i)) {
+                error += (i - 3); // від -3 до +3
+                activeCount++;
+            }
+        }
 
         if (activeCount > 0)
-        	 	 error /= (float)activeCount; // <--- ТЕПЕР ЦЕ ДІЛЕННЯ FLOAT
+        {
+            error /= (float)activeCount; // Ділення float
+        }
+        // (Якщо activeCount == 0, error залишається 0, що є безпечним)
 
+        // PID
         float derivative = error - lastError;
         integral += error;
         float correction = Kp * error + Ki * integral + Kd * derivative;
         lastError = error;
 
-    float baseSpeed = 1000.0f; // <--- ЗМІНЕНО НА FLOAT
- 	float leftSpeed = baseSpeed + correction; // <--- ТЕПЕР ЦЕ FLOAT
- 	 float rightSpeed = baseSpeed - correction; // <--- ТЕПЕР ЦЕ FLOAT
+        // Керування
+        // Логіка для руху задом наперед
+        float baseSpeed = 1000.0f;
+        float leftSpeed  = baseSpeed - correction; // Інвертована логіка
+        float rightSpeed = baseSpeed + correction; // Інвертована логіка
 
-	 // обмеження
- 	if (leftSpeed > 4095.0f) leftSpeed = 4095.0f;
-    if (rightSpeed > 4095.0f) rightSpeed = 4095.0f;
- 	  if (leftSpeed < -4095.0f) leftSpeed = -4095.0f;
- 	 	if (rightSpeed < -4095.0f) rightSpeed = -4095.0f;
+        // обмеження
+        if (leftSpeed > 4095.0f) leftSpeed = 4095.0f;
+        if (rightSpeed > 4095.0f) rightSpeed = 4095.0f;
+        if (leftSpeed < -4095.0f) leftSpeed = -4095.0f;
+        if (rightSpeed < -4095.0f) rightSpeed = -4095.0f;
 
         // Конвертуємо у int лише перед відправкою в мотор
- 	 Motor_Move((int)-leftSpeed, (int)-leftSpeed, (int)-rightSpeed, (int)-rightSpeed);
+        Motor_Move((int)-leftSpeed, (int)-leftSpeed, (int)-rightSpeed, (int)-rightSpeed);
         Leds_Update();
         
-        SendBleNotificationF("Cnt:%d, Err:%.2f, I:%.2f, D:%.2f\r\n", 
-                             activeCount, (float)error, integral, derivative);
-       
+        
+        // Відправка телеметрії раз на секунду
+        if ((Timing_GetMillisecongs() - bleNotifyTimer) >= 1000u) // 1000ms = 1 sec
+        {
+            // Конвертуємо float в int32_t для printf (множимо на 100)
+            int32_t error_tx      = (int32_t)(error * 100);
+            int32_t integral_tx   = (int32_t)(integral * 100);
+            int32_t derivative_tx = (int32_t)(derivative * 100);
+
+            // Використовуємо %ld (long) замість %f (float)
+            SendBleNotificationF("Cnt:%d, Err:%ld, I:%ld, D:%ld\r\n", 
+                                 activeCount, 
+                                 error_tx, 
+                                 integral_tx, 
+                                 derivative_tx);
+            
+            // Скидаємо таймер
+            bleNotifyTimer = Timing_GetMillisecongs();
+        }
+        
         CyDelay(50);
     }
 }
