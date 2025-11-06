@@ -1,9 +1,13 @@
-# PSoC Creator generated files
+# PSoC Creator generated files and build artifacts
 *.cycdx
 *.cyfit
 *.rpt
 *.svd
 *.html
+*.cyprj
+*.cywrk
+*.cyprj.*
+*.cywrk.*
 Generated_Source/
 codegentemp/
 CortexM0p/
@@ -11,34 +15,24 @@ CortexM4/
 Export/
 Debug/
 Release/
+Backup/
 
-# Build directories
+# Build and IDE directories
 **/ARM_GCC_*/*
 **/iar/*
 **/mdk/*
 **/gcc/*
 
-# Project settings
-*.cyprj.*
-*.cywrk.*
-
-# Backup files
-Backup/
-*.bak
-
-# Generated files we don't need in source control
+# Temporary and generated files
 *.txt
 *.log
 *.zip
 *.7z
 *.ctl
+*.bak
 
-# Keep these important files
+# Keep only essential source files
 !*.c
 !*.h
-!*.cysch
-!*.cydwr
-!*.cyprj
-!*.cywrk
 !TopDesign/
 !README.md
