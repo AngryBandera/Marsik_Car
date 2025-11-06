@@ -2,6 +2,7 @@
 #include "car.h"
 #include "music.h"
 #include "cm4_common.h"
+#include <string.h>
 
 /* Implement ISR for I2C_1 */
 void I2C_1_Isr(void)
@@ -20,7 +21,33 @@ ipc_msg_t ipcMsgForCM0 = {               /* IPC structure to be sent to CM0 */
     .buffer   = {},
     .len      = 0
 };
+static void SendBleNotification(const char* message)
+{
+    if (!CM4_IsCM0Ready())
+    {
+        DBG_PRINTF("CM0 not ready, cannot send BLE msg\r\n");
+        return;
+    }
+    size_t messageLen = strlen(message);
+    
+    if ((messageLen + 1) > sizeof(ipcMsgForCM0.buffer))
+    {
+        DBG_PRINTF("BLE Msg too long, truncating.\r\n");
+        messageLen = sizeof(ipcMsgForCM0.buffer) - 1;
+    }
 
+    ipcMsgForCM0.userCode = IPC_USR_CODE_CMD;
+    
+    ipcMsgForCM0.buffer[0] = (uint8_t)CM0_SHARED_BLE_NTF_RELAY;
+    
+    memcpy(&ipcMsgForCM0.buffer[1], message, messageLen);
+    
+    ipcMsgForCM0.len = messageLen + 1;
+
+    CM4_SendCM0Message(&ipcMsgForCM0);
+    
+    DBG_PRINTF("Sent BLE: %s\r\n", message);
+}
 static void processIncomingIPCMessage(ipc_msg_t* msg);
 static void processCM4Command(enum cm4CommandList cmd);
 
@@ -93,6 +120,7 @@ int main(void)
     Leds_FillSolidColor(0, 0, 0);
     
     // MAIN LOOP   
+    SendBleNotification("Wroom! from CM4!");
     for(;;)
     {
         // Check for new messages from CM0 core and process them. This is the most important task.
@@ -207,5 +235,7 @@ static void processCM4Command(enum cm4CommandList cmd)
             break;
     }
 }
+
+
 
 /* [] END OF FILE */
