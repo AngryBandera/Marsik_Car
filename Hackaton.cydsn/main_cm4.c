@@ -23,53 +23,9 @@ ipc_msg_t ipcMsgForCM0 = {               /* IPC structure to be sent to CM0 */
     .buffer   = {},
     .len      = 0
 };
-static void SendBleNotificationF(const char* format, ...)
-{
-    // Буфер тепер локальний, всередині функції (на стеку)
-    // Переконайтеся, що він достатньо великий для ваших повідомлень
-    char ble_buffer[128]; 
-    
-    // Обробка змінних аргументів (va_list)
-    va_list args;
-    va_start(args, format);
-    
-    // Створюємо відформатований рядок у нашому буфері
-    // vsnprintf - це версія snprintf, що приймає va_list
-    vsnprintf(ble_buffer, sizeof(ble_buffer), format, args);
-    
-    va_end(args);
-    
-    // Тепер просто викликаємо нашу стару функцію з готовим буфером
-    SendBleNotification(ble_buffer);
-}
 
-static void SendBleNotification(const char* message)
-{
-    if (!CM4_IsCM0Ready())
-    {
-        DBG_PRINTF("CM0 not ready, cannot send BLE msg\r\n");
-        return;
-    }
-    size_t messageLen = strlen(message);
-    
-    if ((messageLen + 1) > sizeof(ipcMsgForCM0.buffer))
-    {
-        DBG_PRINTF("BLE Msg too long, truncating.\r\n");
-        messageLen = sizeof(ipcMsgForCM0.buffer) - 1;
-    }
-
-    ipcMsgForCM0.userCode = IPC_USR_CODE_CMD;
-    
-    ipcMsgForCM0.buffer[0] = (uint8_t)CM0_SHARED_BLE_NTF_RELAY;
-    
-    memcpy(&ipcMsgForCM0.buffer[1], message, messageLen);
-    
-    ipcMsgForCM0.len = messageLen + 1;
-
-    CM4_SendCM0Message(&ipcMsgForCM0);
-    
-    DBG_PRINTF("Sent BLE: %s\r\n", message);
-}
+static void SendBleNotification(const char* message);
+static void SendBleNotificationF(const char* format, ...);
 static void processIncomingIPCMessage(ipc_msg_t* msg);
 static void processCM4Command(enum cm4CommandList cmd);
 
@@ -273,7 +229,52 @@ static void processCM4Command(enum cm4CommandList cmd)
             break;
     }
 }
+static void SendBleNotification(const char* message)
+{
+    if (!CM4_IsCM0Ready())
+    {
+        DBG_PRINTF("CM0 not ready, cannot send BLE msg\r\n");
+        return;
+    }
+    size_t messageLen = strlen(message);
+    
+    if ((messageLen + 1) > sizeof(ipcMsgForCM0.buffer))
+    {
+        DBG_PRINTF("BLE Msg too long, truncating.\r\n");
+        messageLen = sizeof(ipcMsgForCM0.buffer) - 1;
+    }
 
+    ipcMsgForCM0.userCode = IPC_USR_CODE_CMD;
+    
+    ipcMsgForCM0.buffer[0] = (uint8_t)CM0_SHARED_BLE_NTF_RELAY;
+    
+    memcpy(&ipcMsgForCM0.buffer[1], message, messageLen);
+    
+    ipcMsgForCM0.len = messageLen + 1;
+
+    CM4_SendCM0Message(&ipcMsgForCM0);
+    
+    DBG_PRINTF("Sent BLE: %s\r\n", message);
+}
+static void SendBleNotificationF(const char* format, ...)
+{
+    // Буфер тепер локальний, всередині функції (на стеку)
+    // Переконайтеся, що він достатньо великий для ваших повідомлень
+    char ble_buffer[128]; 
+    
+    // Обробка змінних аргументів (va_list)
+    va_list args;
+    va_start(args, format);
+    
+    // Створюємо відформатований рядок у нашому буфері
+    // vsnprintf - це версія snprintf, що приймає va_list
+    vsnprintf(ble_buffer, sizeof(ble_buffer), format, args);
+    
+    va_end(args);
+    
+    // Тепер просто викликаємо нашу стару функцію з готовим буфером
+    SendBleNotification(ble_buffer);
+}
 
 
 /* [] END OF FILE */
