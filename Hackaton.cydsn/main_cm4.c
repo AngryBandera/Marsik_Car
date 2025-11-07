@@ -24,17 +24,42 @@ ipc_msg_t ipcMsgForCM0 = {               /* IPC structure to be sent to CM0 */
     .len      = 0
 };
 
-static float Kp = 1000.0f;
-static float Ki = 0.0f;
-static float Kd = 0.0f;
+static float Kp = 2000.0f;
+static float Ki = 0.1f;
+static float Kd = 150.0f;
 
 static float lastError = 0;
 static float integral = 0;
+
+uint32_t leftSideTotal = 0;
+uint32_t rightSideTotal = 0;
+bool sideTurn = false;
+bool calibrationActive = true;
+int8_t side = -1;
+
+static float mean_non_error = 0;
+uint16_t counter_non_error = 0;
+
+float base_err_list[7] = {-3.0f, -2.0f, -1.0f, 0.0f, 1.0f, 2.0f, 3.0f};
+
+float left_non_err_list[7] = {-3.0f, -2.0f, -1.0f, 0.0f, 3.0f, 5.0f, 7.0f};
+float right_non_err_list[7] = {-7.0f, -5.0f, -3.0f, 0.0f, 1.0f, 2.0f, 3.0f};
+float *non_err_list = base_err_list;
 
 static void SendBleNotification(const char* message);
 static void SendBleNotificationF(const char* format, ...);
 static void processIncomingIPCMessage(ipc_msg_t* msg);
 static void processCM4Command(ipc_msg_t* msg);
+
+//float err_list[7] = {-3.0f, -2.0f, -1.0f, 0.0f, 2.3f, 4.8f, 7.3f};
+//float err_list[7] = {-5.5f, -3.5f, -2.0f, 0.0f, 1.0f, 2.0f, 3.0f};
+float left_err_list[7] = {-7.0f, -4.5f, -2.0f, 0.0f, 1.0f, 2.0f, 3.0f};
+float right_err_list[7] = {-3.0f, -2.0f, -1.0f, 0.0f, 2.0f, 4.5f, 7.0f};
+
+float *err_list = base_err_list;
+
+float maxSpeed = 1500.0f;
+float preMaxSpeed = 1000.0f;
 
 
 int main(void)
@@ -78,23 +103,48 @@ int main(void)
    
 
     CyDelay(500);
+    
 
     uint32_t timeout = Timing_GetMillisecongs();
     uint32_t cycle = 0;
+    
 
     // Then execute remaining code
     Leds_FillSolidColor(0, 0, 0);
     
     uint32_t bleNotifyTimer = Timing_GetMillisecongs();
     
+    
     // MAIN LOOP   
     
+    uint32_t start = Timing_GetMillisecongs();
+    #define ACTIVE_TIME_LEN 5
+    int activeCountArray[ACTIVE_TIME_LEN];
+    uint32_t lastActiveTime = Timing_GetMillisecongs();
+    int activeTimePointer = 0;
+    
     SendBleNotification("Wroom! from CM4!");
+    
+    for(int i = 0; i < 10; i++) {
+        Sound_Play(1000 * (10 -i), 100); 
+        CyDelay(900);
+    }
+    
+    Motor_Move(-1000, -1000, -1000, -1000);
+    CyDelay(500);
+    
+    uint32_t calibrationStartTime = Timing_GetMillisecongs();
     for(;;)
     {
+        start++;
         // Check for new messages from CM0 core and process them. This is the most important task.
         if (CM4_isDataAvailableFromCM0())
         {
+            Motor_Move(0, 0, 0 ,0);
+            for(int i = 0; i < 10; i++) {
+                Sound_Play(1000 * (i+1), 100); 
+                CyDelay(900);
+            }
             processIncomingIPCMessage(CM4_GetCM0Message());
         }
         
@@ -106,25 +156,123 @@ int main(void)
         {
             Leds_PutPixel(i, track_copy_for_led & 0x01u ? 0x55u : 0x00u, 0x00u, 0x00u);
             track_copy_for_led = track_copy_for_led >> 1;
+            
         }    
         
-        if(track & 0x08){ // Центральний датчик
+        
+        
+        
+        /*if(track & 0x08){ // Центральний датчик
             Leds_PutPixel(7, 255, 0, 0); // Червоний
         }else{
             Leds_PutPixel(7, 0, 0, 0);
-        }
+        }*/
         
         
         // Логіка ПІД-регулятора
         float error = 0.0f; 
+        float non_error = 0.0f;
         int8_t activeCount = 0;
         
         for (int8_t i = 0; i < 7; i++) {
             if (track & (1 << i)) {
-                error += (i - 3); // від -3 до +3
+                error += err_list[i]; // від -3 до +3
                 activeCount++;
+                non_error += err_list[i];
             }
         }
+        
+        if (Timing_GetMillisecongs() - lastActiveTime > 20) {
+            activeCountArray[activeTimePointer] = activeCount;
+            lastActiveTime = Timing_GetMillisecongs();
+            activeTimePointer = (activeTimePointer + 1) % ACTIVE_TIME_LEN;
+        }
+        
+        /*if (activeCount == 0)
+        {
+            if (lastError > 0)
+                Motor_Move(-2095, -2095, 2095, 2095);
+            else
+                Motor_Move(2095, 2095, -2095, -2095);
+            
+            while (((track >>3) & 1) == 0) {
+                track = Track_Read();
+            }
+            continue;
+        }*/
+        uint32_t curLeftSideCount = 0;   // Біти 0,1,2 (ліворуч від центру)        uint32_
+        uint32_t curRightSideCount = 0;  // Біти 4,5,6 (праворуч від центру)               
+        for (int8_t i = 0; i < 7; i++) {            
+            if (track & (1 << i)) {               
+                error += err_list[i]; // від -3 до +3               
+                activeCount++;               
+                non_error += err_list[i];               
+                
+                if (i < 3) {               
+                    curLeftSideCount += 3 - i;   // Ліва сторона (біти 0,1,2)               
+                } else if (i > 3) {               
+                    curRightSideCount += i - 3;  // Права сторона (біти 4,5,6)               
+                }            
+            }  
+                  
+        }      
+        
+        
+        if (mean_non_error > 200) mean_non_error = 200;
+        if (mean_non_error < -200) mean_non_error = -200;
+        if (activeCount != 0) mean_non_error = (4.0f * non_error + 96.0f * mean_non_error) / 100.0f;
+        
+        if (activeCount == 0)
+        {
+            
+            /*if (mean_non_error > 0) {
+                Motor_Move(-1095, -1095, 2095, 2095);
+                if (calibrationActive) sideTurn = true; }
+            else if (mean_non_error < 0)
+                Motor_Move(2095, 2095, -1095, -1095);*/
+            
+            if (mean_non_error > 0) {
+                Motor_Move(-1200, -1200, 1800, 1800);
+                if (calibrationActive) sideTurn = false;
+            }
+            else if (mean_non_error < 0) {
+                Motor_Move(1800, 1800, -1200, -1200);
+                if (calibrationActive) sideTurn = true;
+            }
+            
+            while (((track >>3) & 1) == 0) {
+                if (CM4_isDataAvailableFromCM0())
+                {
+                    processIncomingIPCMessage(CM4_GetCM0Message());
+                }
+                track = Track_Read();
+            }
+            continue;
+        }
+        counter_non_error = 0;
+        
+        if (calibrationActive) {           
+            uint32_t elapsedTime = Timing_GetMillisecongs() - calibrationStartTime;               
+            if (elapsedTime > 5000u) {               
+            /*    leftSideTotal += curLeftSideCount;               
+                rightSideTotal += curRightSideCount;       
+            } else {               
+                calibrationActive = false;   */
+                
+                  
+                if (sideTurn) {               
+                    side = 1; 
+                    err_list = right_err_list;
+                    non_err_list = right_err_list;
+                } else {               
+                    side = 0;                 
+                    err_list = left_err_list;               
+                    non_err_list = left_non_err_list;               
+                }      
+                calibrationActive = false;
+            }
+        } 
+        
 
         if (activeCount > 0)
         {
@@ -140,18 +288,22 @@ int main(void)
 
         // Керування
         // Логіка для руху задом наперед
-        float baseSpeed = 1000.0f;
-        float leftSpeed  = baseSpeed - correction; // Інвертована логіка
-        float rightSpeed = baseSpeed + correction; // Інвертована логіка
+        float baseSpeed = 800.0f;
+        float leftSpeed  = baseSpeed + correction; // Інвертована логіка
+        float rightSpeed = baseSpeed - correction; // Інвертована логіка
 
         // обмеження
-        if (leftSpeed > 4095.0f) leftSpeed = 4095.0f;
-        if (rightSpeed > 4095.0f) rightSpeed = 4095.0f;
-        if (leftSpeed < -4095.0f) leftSpeed = -4095.0f;
-        if (rightSpeed < -4095.0f) rightSpeed = -4095.0f;
+        
+
+        
+        if (leftSpeed > maxSpeed) leftSpeed = maxSpeed;
+        if (rightSpeed > maxSpeed) rightSpeed = maxSpeed;
+        if (leftSpeed < -preMaxSpeed) leftSpeed = -preMaxSpeed;
+        if (rightSpeed < -preMaxSpeed) rightSpeed = -preMaxSpeed;
 
         // Конвертуємо у int лише перед відправкою в мотор
         Motor_Move((int)-leftSpeed, (int)-leftSpeed, (int)-rightSpeed, (int)-rightSpeed);
+
         Leds_Update();
         
         
@@ -162,19 +314,20 @@ int main(void)
             int32_t error_tx      = (int32_t)(error * 100);
             int32_t integral_tx   = (int32_t)(integral * 100);
             int32_t derivative_tx = (int32_t)(derivative * 100);
+            
 
             // Використовуємо %ld (long) замість %f (float)
-            SendBleNotificationF("Cnt:%d, Err:%ld, I:%ld, D:%ld\r\n", 
+            SendBleNotificationF("Cnt:%d, Err:%ld, I:%ld, D:%ld, Start:%lu\r\n", 
                                  activeCount, 
                                  error_tx, 
                                  integral_tx, 
-                                 derivative_tx);
+                                 derivative_tx,
+                                start);
             
             // Скидаємо таймер
             bleNotifyTimer = Timing_GetMillisecongs();
         }
         
-        CyDelay(50);
     }
 }
 
@@ -198,7 +351,7 @@ static void processIncomingIPCMessage(ipc_msg_t* msg)
                 {
                     // Not implemented. You can be very creative here!
                     break;
-                }
+                    }
                 default:
                     break;
             }
@@ -238,7 +391,7 @@ static void processCM4Command(ipc_msg_t* msg)
         }
         case CM4_COMMAND_ECHO:
         {
-            // *** ВИПРАВЛЕНА ЛОГІКА ECHO ***
+            // * ВИПРАВЛЕНА ЛОГІКА ECHO *
             // (Використовуємо 'msg', що прийшов, а не викликаємо CM4_GetCM0Message() знову)
             if (CM4_IsCM0Ready())
             {
@@ -289,6 +442,7 @@ static void processCM4Command(ipc_msg_t* msg)
             }
             break;
         }
+        
 
         case CM4_COMMAND_SET_KD:
         {
@@ -330,7 +484,8 @@ static void SendBleNotification(const char* message)
     
     ipcMsgForCM0.buffer[0] = (uint8_t)CM0_SHARED_BLE_NTF_RELAY;
     
-    memcpy(&ipcMsgForCM0.buffer[1], message, messageLen);
+    memcpy(&ipcMsgForCM0.buffer[1], message,
+    messageLen);
     
     ipcMsgForCM0.len = messageLen + 1;
 
